@@ -1,7 +1,7 @@
 #include <Wire.h>               //standard library
-#include "SerialTransfer.h"
-#include "Adafruit_VCNL4010.h"
-#include <MS5803_14.h>          // https://github.com/millerlp/MS5803_14
+#include "src/libs/SerialTransfer/SerialTransfer.h"
+#include "src/libs/Adafruit_VCNL4010/Adafruit_VCNL4010.h"
+#include "src/libs/MS5803_14/MS5803_14.h" 
 
 SerialTransfer myTransfer;
 

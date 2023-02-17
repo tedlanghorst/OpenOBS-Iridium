@@ -7,12 +7,11 @@
 #include <Wire.h>               //standard library
 #include <SPI.h>                //standard library
 #include <EEPROM.h>             //standard library
-#include "LowPower.h"           
-#include "SerialTransfer.h"     //Version 3.1.2 https://github.com/PowerBroker2/SerialTransfer
 #include <SdFat.h>              //Version 2.0.7 https://github.com/greiman/SdFat //uses 908 bytes of memory
-#include <DS3231.h>             //Updated Jan 2, 2017 https://github.com/kinasmith/DS3231
-#include <IridiumSBD.h>         // Click here to get the library: http://librarymanager/All#IridiumSBDI2C
-
+#include "src/libs/LowPower/LowPower.h"           
+#include "src/libs/SerialTransfer/SerialTransfer.h" 
+#include "src/libs/DS3231/DS3231.h"          
+#include "src/libs/IridiumSBD/IridiumSBD.h"         
 
 //firmware data
 const DateTime uploadDT = DateTime((__DATE__),(__TIME__)); //saves compile time into progmem
