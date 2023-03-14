@@ -5,7 +5,7 @@ void sensorRequest(byte request){
 }
 
 void sensorWake(){
-  digitalWrite(pSensorPower,LOW); // turn on sensor.
+  digitalWrite(p3V3Power,HIGH); // turn on sensor.
   Serial1.begin(115200);
   myTransfer.begin(Serial1);
 
@@ -24,7 +24,7 @@ void sensorWake(){
 }
 
 void sensorSleep(){
-  digitalWrite(pSensorPower,HIGH); //turn off sensor.
+  digitalWrite(p3V3Power,LOW); //turn off sensor.
   Serial1.end();
   startup.module.sensor = 0;
 }
@@ -36,6 +36,7 @@ void loggerSleep(DateTime alarmTime){
   RTC.enableAlarm(alarmTime);
   serialSend("POWEROFF,1");
   attachInterrupt(digitalPinToInterrupt(pRtcInterrupt), wake, LOW);
+  delay(500); //Extra time to ensure interrupt attach and sd file.
   sensorSleep();
   LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
 //  delay(sleepDuration_seconds*1000); //delay program if we have another power source
@@ -59,7 +60,7 @@ void writeDataToSD(single_record_t record){
     file.print(',');
     file.print(record.water_temp);
     file.print(',');
-    file.println(data.batteryLevel); //klugey use of global variable...
+    file.println(batteryLevel); //klugey use of global variable...
   file.close();
 }
 

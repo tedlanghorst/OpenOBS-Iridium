@@ -1,17 +1,20 @@
 bool checkGuiConnection() {
-  long tStart = millis();
-  while (millis() - tStart < COMMS_WAIT) {
+  guiConnected = false;
+  int try_count = 0;
+  while (try_count < COMMS_TRY) {
     sprintf(messageBuffer, "OPENOBS,%u", serialNumber);
     serialSend(messageBuffer);
-    delay(200); //allow time for the gui to process/respond.
+    delay(50);
     if (serialReceive(&messageBuffer[0])) {
       if (strncmp(messageBuffer, "$OPENOBS", 8) == 0) {
         startup.module.clk = RTC.begin(); //reset the RTC
         guiConnected = true;
+        return true;
       }
     }
+    try_count++;
   }
-  return guiConnected;
+  return false;
 }
 
 void receiveGuiSettings() {

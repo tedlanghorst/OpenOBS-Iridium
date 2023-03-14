@@ -22,9 +22,9 @@ uint16_t serialNumber;
 //connected pins
 #define pChipSelect 53      
 #define pRtcInterrupt 2
-#define pSensorPower 4
-#define pIridiumPower 5
-#define pBatteryMonitor A0
+#define p3V3Power 41
+#define pIridiumPower 4 //should remap pin on PCB
+#define pBatteryMonitor A7
 
 //EEPROM addresses
 #define SLEEP_ADDRESS 0
@@ -33,8 +33,9 @@ uint16_t serialNumber;
 
 //gui communications vars
 bool guiConnected = false;
-const uint16_t COMMS_WAIT = 1000;    //ms delay to try gui connection
-const int MAX_CHAR = 60;            //max num character in messages
+const uint16_t COMMS_WAIT = 2000; //ms delay to try gui connection
+const uint8_t COMMS_TRY = 3;    
+const uint8_t MAX_CHAR = 60;            //max num character in messages
 char messageBuffer[MAX_CHAR];       //buffer for sending and receiving comms
 
 SerialTransfer myTransfer;
@@ -50,13 +51,14 @@ typedef struct single_record_t {
 //max message is 340 bytes, but charged per 50 bytes.
 #define N_RECORDS (int(50)/sizeof(single_record_t)) 
 typedef union data_union_t{
-  int16_t batteryLevel;
   single_record_t records[N_RECORDS];
-  byte serialPacket[2 + sizeof(single_record_t)*N_RECORDS];
+  byte serialPacket[sizeof(single_record_t)*N_RECORDS];
 };
 data_union_t data, data_failedPacket;
 uint8_t recordCount = 0;
 bool failedPacket = false;
+
+int16_t batteryLevel;
 
 //initialization variable
 typedef struct module_t {
@@ -73,7 +75,7 @@ startup_t startup;
 
 //time settings
 long currentTime = 0;
-long sleepDuration_seconds = 3600;
+long sleepDuration_seconds = 0;
 long delayedStart_seconds = 0;
 DateTime nextAlarm;
 DS3231 RTC; //create RTC object
@@ -90,24 +92,31 @@ SdFile file;
 
 //Iridium
 #define DIAGNOSTICS false // Change this to see diagnostics
-IridiumSBD modem(Serial3); 
+IridiumSBD modem(Serial2); 
 int modemErr;
+bool useIridium = true;
 
 void setup(){
-  Serial.begin(115200);
+  Serial.begin(250000);
   Serial.setTimeout(50);
   Wire.begin();
   EEPROM.get(SN_ADDRESS, serialNumber);
 
 //  pinMode(pRtcInterrupt, INPUT);
 //  digitalWrite(pRtcInterrupt, HIGH);
-  pinMode(pSensorPower,OUTPUT);
+  pinMode(p3V3Power,OUTPUT);
+  digitalWrite(p3V3Power,HIGH);
   pinMode(pIridiumPower,OUTPUT);
 
 
-  //initialize the Iridium modem.
-  startup.module.iridium = startIridium();
-  int signalQuality = getIridiumSignalQuality();
+//  initialize the Iridium modem.
+  if (useIridium){
+    startup.module.iridium = startIridium();
+    int signalQuality = getIridiumSignalQuality();
+  }
+  else {
+     startup.module.iridium = true;
+  }
   
 /* With power switching between measurements, we need to know what kind of setup() this is.
  *  First, check if the firmware was updated.
@@ -131,6 +140,23 @@ void setup(){
     //if no contact from GUI, read last stored value
     EEPROM.get(SLEEP_ADDRESS,sleepDuration_seconds);
     startup.module.clk = true; //assume true if logger woke up.
+  }
+
+  //Check if SN has been changed from the default 0xFFFF.
+  //If it has not, then loop through asking for a new one.
+  while (serialNumber == 0xFFFF){
+    Serial.println(F("Missing serial number. Enter a valid SN [1-65534]:"));
+    while(Serial.available()==0){}; //wait for input
+    uint16_t tmp_SN = Serial.parseInt();
+    if (tmp_SN==0 || tmp_SN ==0xFFFF){
+      Serial.println(F("Invalid SN"));
+    } 
+    else {
+      EEPROM.put(SN_ADDRESS,tmp_SN);
+      EEPROM.get(SN_ADDRESS,serialNumber);
+      Serial.print(F("SN successfully set to: "));
+      Serial.println(serialNumber);
+    }
   }
   
   //Initialize & check all the modules.
@@ -188,16 +214,17 @@ void loop()
     if(myTransfer.available()){
       myTransfer.rxObj(data.records[recordCount]);
       data.records[recordCount].logTime = RTC.now().unixtime();
-      data.batteryLevel = 0; //not working for 12v converted boxes yet.
-      sensorSleep();
+      batteryLevel = 0; //not working for 12v converted boxes yet.
       writeDataToSD(data.records[recordCount]);
       recordCount += 1;
+      Serial.println(F("Data received"));
       break;
     }
   }
 
   //if we have filled out transmit packet...
   if(recordCount == N_RECORDS){
+    recordCount = 0; //reset our packet idx
     Serial.println();
     for(int i=0; i<N_RECORDS; i++){
       Serial.print("time:\t\t");
@@ -214,50 +241,51 @@ void loop()
       Serial.flush();
     }
 
-    int tries = 0;
-    bool messageSent = false;
-    digitalWrite(pIridiumPower,HIGH);
-    while (!messageSent && tries<2){
-      Serial.println(F("Trying to send the message.  This might take a minute."));
-      //This could be more elegant. Currently only care if the current packet sends. 
-      //If we fail 2 in a row the older will be overwritten (still on SD card).
-      //Should also pack this stuff in a function, could handle the 2 sends more elegantly that way.
-      if (failedPacket){
-        //send the old data if we have some.
-        modemErr = modem.sendSBDBinary(data_failedPacket.serialPacket,sizeof(data_failedPacket));
-        if (modemErr == ISBD_SUCCESS){
-          Serial.println(F("Previous failed packet sent!"));
-          failedPacket = false;
+    if (useIridium){
+      int tries = 0;
+      bool messageSent = false;
+      digitalWrite(pIridiumPower,HIGH);
+      while (!messageSent && tries<2){
+        Serial.println(F("Trying to send the message.  This might take a minute."));
+        //This could be more elegant. Currently only care if the current packet sends. 
+        //If we fail 2 in a row the older will be overwritten (still on SD card).
+        //Should also pack this stuff in a function, could handle the 2 sends more elegantly that way.
+        if (failedPacket){
+          //send the old data if we have some.
+          modemErr = modem.sendSBDBinary(data_failedPacket.serialPacket,sizeof(data_failedPacket));
+          if (modemErr == ISBD_SUCCESS){
+            Serial.println(F("Previous failed packet sent!"));
+            failedPacket = false;
+          }
         }
-      }
-      //send the current data packet.
-      modemErr = modem.sendSBDBinary(data.serialPacket,sizeof(data));
-      tries++;
-      
-      if (modemErr != ISBD_SUCCESS){
-        Serial.print(F("sendSBDText failed: error "));
-        Serial.println(modemErr);
-        if (modemErr == ISBD_SENDRECEIVE_TIMEOUT)
-          Serial.println(F("Try again with a better view of the sky."));
-      } 
-      else {
-        Serial.println(F("Message sent!"));
-        messageSent = true;
-      }
-  
-      // Clear the Mobile Originated message buffer
-      modemErr = modem.clearBuffers(ISBD_CLEAR_MO); // Clear MO buffer
-      if (modemErr != ISBD_SUCCESS){
-        Serial.print(F("clearBuffers failed: error "));
-        Serial.println(modemErr);
-      }
+        //send the current data packet.
+        modemErr = modem.sendSBDBinary(data.serialPacket,sizeof(data));
+        tries++;
+        
+        if (modemErr != ISBD_SUCCESS){
+          Serial.print(F("sendSBDText failed: error "));
+          Serial.println(modemErr);
+          if (modemErr == ISBD_SENDRECEIVE_TIMEOUT)
+            Serial.println(F("Try again with a better view of the sky."));
+        } 
+        else {
+          Serial.println(F("Message sent!"));
+          messageSent = true;
+        }
     
-    Serial.println();
-    recordCount = 0; //reset our packet idx
-    }
-    if (!messageSent){
-      data_failedPacket = data; //store failed data, try next time.
-      failedPacket = true;
+        // Clear the Mobile Originated message buffer
+        modemErr = modem.clearBuffers(ISBD_CLEAR_MO); // Clear MO buffer
+        if (modemErr != ISBD_SUCCESS){
+          Serial.print(F("clearBuffers failed: error "));
+          Serial.println(modemErr);
+        }
+      
+      Serial.println();
+      }
+      if (!messageSent){
+        data_failedPacket = data; //store failed data, try next time.
+        failedPacket = true;
+      }
     }
   }
 

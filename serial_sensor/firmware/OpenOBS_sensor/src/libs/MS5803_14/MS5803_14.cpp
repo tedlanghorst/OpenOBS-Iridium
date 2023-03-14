@@ -29,7 +29,7 @@
 
 // For I2C, set the CSB Pin (pin 3) high for address 0x76, and pull low
 // for address 0x77. If you use 0x77, change the value on the line below:
-#define MS5803_I2C_ADDRESS    0x76
+#define MS5803_I2C_ADDRESS    0x77
 
 #define CMD_RESET		0x1E	// ADC reset command
 #define CMD_ADC_READ	0x00	// ADC read command
