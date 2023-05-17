@@ -6,19 +6,22 @@ void sensorRequest(byte request){
 
 void sensorWake(){
   digitalWrite(p3V3Power,HIGH); // turn on sensor.
-  Serial1.begin(115200);
+  Serial1.begin(9600);
   myTransfer.begin(Serial1);
-
-  sensorRequest(1);
   
+  sensorRequest(1);
   long tStart = millis();
   while(startup.module.sensor != 3 && millis()-tStart<COMMS_WAIT){
     if(myTransfer.available()){
       //For some reason we need to read the transfer into a tmp object this time. 
       //Maybe something incongruous with the strcuture. Works with data struct.
+      uint16_t recSize = 0;
       byte tmp;
-      myTransfer.rxObj(tmp);
+      recSize = myTransfer.rxObj(tmp, recSize);
       startup.module.sensor = tmp;
+      recSize = myTransfer.rxObj(serialNumber, recSize);
+      Serial.print("Sensor S/N: ");
+      Serial.println(serialNumber);
     }
   }
 }

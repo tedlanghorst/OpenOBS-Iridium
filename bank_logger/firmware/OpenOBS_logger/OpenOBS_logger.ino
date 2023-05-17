@@ -1,6 +1,5 @@
 /* TODO
- * Check sensor initialization with message exchange.
- * Figure out optimal batching of iridium message
+ * Read in serial number from sensor serial transfer.
  * 
  */
 
@@ -11,11 +10,17 @@
 #include "src/libs/LowPower/LowPower.h"           
 #include "src/libs/SerialTransfer/SerialTransfer.h" 
 #include "src/libs/DS3231/DS3231.h"          
-#include "src/libs/IridiumSBD/IridiumSBD.h"         
+#include "src/libs/IridiumSBD/IridiumSBD.h"       
+#include "src/libs/MS5803/MS5803.h"  
+
+// Likely variables to change
+long sleepDuration_seconds = 10;
+bool useIridium = false;
+const char contactInfo[] PROGMEM = "If found, please contact tlang@live.unc.edu";
+//
 
 //firmware data
 const DateTime uploadDT = DateTime((__DATE__),(__TIME__)); //saves compile time into progmem
-const char contactInfo[] PROGMEM = "If found, please contact tlang@live.unc.edu"; 
 const char dataColumnLabels[] PROGMEM = "time,hydrostatic_pressure,ambient_light,scattered_light,water_temperature,battery_level";
 uint16_t serialNumber; 
 
@@ -23,12 +28,11 @@ uint16_t serialNumber;
 #define pChipSelect 53      
 #define pRtcInterrupt 2
 #define p3V3Power 41
-#define pIridiumPower 4 //should remap pin on PCB
+#define pIridiumPower 3 //need to remap pin on PCB
 #define pBatteryMonitor A7
 
 //EEPROM addresses
 #define SLEEP_ADDRESS 0
-#define SN_ADDRESS 500
 #define UPLOAD_TIME_ADDRESS 502
 
 //gui communications vars
@@ -40,14 +44,20 @@ char messageBuffer[MAX_CHAR];       //buffer for sending and receiving comms
 
 SerialTransfer myTransfer;
 
+//barometer
+MS_5803 pressure_sensor = MS_5803(2, 0x77, 4096);
+
 //data storage variables
 typedef struct single_record_t {
-  uint32_t logTime;
-  uint32_t hydro_p;
-  uint16_t tuBackground;
-  uint16_t tuReading; 
-  int16_t water_temp;
-}; //14 bytes
+  uint32_t logTime: 32;
+  uint16_t tuBackground: 16;    //max 2 bytes
+  uint16_t tuReading: 16;       //max 2 bytes
+  uint32_t hydro_p: 21;         //max value 1400000 (14 bar / 10^-5)
+  int16_t water_temp: 11;        //max value +/- 500 (50 C / 10^-1)
+  int16_t baroAnomaly_p: 14;   //max value 10000 (0.1 bar / 10^-5; max deviation 100 hPa)
+  int16_t air_temp: 10;         //max value +/- 500 (50 C / 10^-1)
+  uint8_t battery_V: 8;          //max value 150 (15 V / 10^-1)
+}; //127 bits, 16 bytes
 //max message is 340 bytes, but charged per 50 bytes.
 #define N_RECORDS (int(50)/sizeof(single_record_t)) 
 typedef union data_union_t{
@@ -55,6 +65,7 @@ typedef union data_union_t{
   byte serialPacket[sizeof(single_record_t)*N_RECORDS];
 };
 data_union_t data, data_failedPacket;
+
 uint8_t recordCount = 0;
 bool failedPacket = false;
 
@@ -65,6 +76,7 @@ typedef struct module_t {
   bool sd:1;
   bool clk:1;
   bool iridium:1;
+  bool baro:1;
   byte sensor:2;
 };
 typedef union startup_t {
@@ -75,7 +87,6 @@ startup_t startup;
 
 //time settings
 long currentTime = 0;
-long sleepDuration_seconds = 0;
 long delayedStart_seconds = 0;
 DateTime nextAlarm;
 DS3231 RTC; //create RTC object
@@ -94,20 +105,17 @@ SdFile file;
 #define DIAGNOSTICS false // Change this to see diagnostics
 IridiumSBD modem(Serial2); 
 int modemErr;
-bool useIridium = true;
 
 void setup(){
   Serial.begin(250000);
   Serial.setTimeout(50);
   Wire.begin();
-  EEPROM.get(SN_ADDRESS, serialNumber);
-
-//  pinMode(pRtcInterrupt, INPUT);
-//  digitalWrite(pRtcInterrupt, HIGH);
   pinMode(p3V3Power,OUTPUT);
-  digitalWrite(p3V3Power,HIGH);
   pinMode(pIridiumPower,OUTPUT);
-
+  
+  //Check connection with serial sensor.
+  //Also sets serial number from sensor.
+  sensorWake();
 
 //  initialize the Iridium modem.
   if (useIridium){
@@ -141,46 +149,34 @@ void setup(){
     EEPROM.get(SLEEP_ADDRESS,sleepDuration_seconds);
     startup.module.clk = true; //assume true if logger woke up.
   }
-
-  //Check if SN has been changed from the default 0xFFFF.
-  //If it has not, then loop through asking for a new one.
-  while (serialNumber == 0xFFFF){
-    Serial.println(F("Missing serial number. Enter a valid SN [1-65534]:"));
-    while(Serial.available()==0){}; //wait for input
-    uint16_t tmp_SN = Serial.parseInt();
-    if (tmp_SN==0 || tmp_SN ==0xFFFF){
-      Serial.println(F("Invalid SN"));
-    } 
-    else {
-      EEPROM.put(SN_ADDRESS,tmp_SN);
-      EEPROM.get(SN_ADDRESS,serialNumber);
-      Serial.print(F("SN successfully set to: "));
-      Serial.println(serialNumber);
-    }
-  }
   
   //Initialize & check all the modules.
   startup.module.sd = sd.begin(pChipSelect,SPI_SPEED);
+  startup.module.baro = pressure_sensor.initializeMS_5803();
+  
   if(!startup.module.sd) serialSend("SDINIT,0");
   if(!startup.module.clk) serialSend("CLKINIT,0");
   if(!startup.module.iridium) serialSend("IRIDIUMINIT,0");
-  sensorWake();
+  if(!startup.module.baro) serialSend("BAROINIT,0");
   if(startup.module.sensor != 3) serialSend("SENSORINIT,0");
 
   //if we had any errors turn off battery power and stop program.
   //set another alarm to try again- intermittent issues shouldnt end entire deploy.
   //RTC errors likely are fatal though. Will it even wake if RTC fails?
-  while(startup.b != 0b11111){ 
+  while(startup.b != 0b111111){ 
     nextAlarm = DateTime(RTC.now().unixtime() + sleepDuration_seconds);
     loggerSleep(nextAlarm);
+    sensorWake();
     //Initialize & check all the modules.
     Serial.println(F("rechecking modules...."));
     startup.module.sd = sd.begin(pChipSelect,SPI_SPEED);
+    startup.module.baro = pressure_sensor.initializeMS_5803();
     if(!startup.module.sd) serialSend("SDINIT,0");
     if(!startup.module.clk) serialSend("CLKINIT,0");
     if(!startup.module.iridium) serialSend("IRIDIUMINIT,0");
-    sensorWake();
+    if(!startup.module.baro) serialSend("BAROINIT,0");
     if(startup.module.sensor != 3) serialSend("SENSORINIT,0");
+    Serial.println(startup.module.sensor);
   }
 
   //if we have established a connection to the java gui, 
@@ -207,17 +203,40 @@ void loop()
   //Request data
   while(startup.module.sensor != 3) sensorWake();
   sensorRequest(2);
+  pressure_sensor.readSensor();
 
  //wait for data to be available
   long tStart = millis();
   while (millis() - tStart < COMMS_WAIT) {
     if(myTransfer.available()){
       myTransfer.rxObj(data.records[recordCount]);
+      //fill out the logger side of data
       data.records[recordCount].logTime = RTC.now().unixtime();
-      batteryLevel = 0; //not working for 12v converted boxes yet.
+      int32_t input = pressure_sensor.getPressure()-100000;
+      data.records[recordCount].baroAnomaly_p = constrain(input,-10000,10000); //bar*10^-5
+      input = pressure_sensor.getTemperature()/10;
+      data.records[recordCount].air_temp = constrain(input,-500,500); //C*10^-1
+      data.records[recordCount].battery_V = uint32_t(analogRead(pBatteryMonitor))*10*11*5/1024; //10:1 resistor divider. scaled to 10^-1 V
       writeDataToSD(data.records[recordCount]);
+      Serial.print("time:\t\t");
+      Serial.println(data.records[recordCount].logTime);
+      Serial.print("background:\t");
+      Serial.println(data.records[recordCount].tuBackground);
+      Serial.print("reading:\t");
+      Serial.println(data.records[recordCount].tuReading);
+      Serial.print("hydro p:\t");
+      Serial.println(data.records[recordCount].hydro_p);
+      Serial.print("water temp:\t");
+      Serial.println(data.records[recordCount].water_temp); 
+      Serial.print("air p:\t\t");
+      Serial.println(data.records[recordCount].baroAnomaly_p);
+      Serial.print("air temp:\t");
+      Serial.println(data.records[recordCount].air_temp); 
+      Serial.print("battery:\t");
+      Serial.println(data.records[recordCount].battery_V); 
+      Serial.println();
+      Serial.flush();
       recordCount += 1;
-      Serial.println(F("Data received"));
       break;
     }
   }
@@ -225,22 +244,15 @@ void loop()
   //if we have filled out transmit packet...
   if(recordCount == N_RECORDS){
     recordCount = 0; //reset our packet idx
-    Serial.println();
-    for(int i=0; i<N_RECORDS; i++){
-      Serial.print("time:\t\t");
-      Serial.println(data.records[i].logTime);
-      Serial.print("background:\t");
-      Serial.println(data.records[i].tuBackground);
-      Serial.print("reading:\t");
-      Serial.println(data.records[i].tuReading);
-      Serial.print("hydro p:\t");
-      Serial.println(data.records[i].hydro_p);
-      Serial.print("water temp:\t");
-      Serial.println(data.records[i].water_temp); 
-      Serial.println();
-      Serial.flush();
-    }
+    Serial.println("~~~Packet filled!~~~");
 
+    char hexChar[2];
+    for(int i=0; i<sizeof(data.serialPacket); i++){
+      sprintf(hexChar,"%02X",data.serialPacket[i]);
+      Serial.print(hexChar);
+    }
+    Serial.println();
+    Serial.println();
     if (useIridium){
       int tries = 0;
       bool messageSent = false;

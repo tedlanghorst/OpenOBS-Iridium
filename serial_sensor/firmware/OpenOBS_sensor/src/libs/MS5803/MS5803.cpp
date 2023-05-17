@@ -1,11 +1,11 @@
-/*	MS5803_14
+/*	MS5803
  * 	An Arduino library for the Measurement Specialties MS5803 family
  * 	of pressure sensors. This library uses I2C to communicate with the
  * 	MS5803 using the Wire library from Arduino.
  *	
- *	This library only works with the MS5803-14BA model sensor. It DOES NOT
- *	work with the other pressure-range models such as the MS5803-30BA or
- *	MS5803-01BA. Those models will return incorrect pressure and temperature 
+ *	This library only works with the MS5803 2, 5, and 14 bar range model sensors. 
+ * 	It DOES NOT work with the other pressure-range models such as the MS5803-30BA 
+ * 	or MS5803-01BA. Those models will return incorrect pressure and temperature 
  *	readings if used with this library. See http://github.com/millerlp for
  *	libraries for the other models. 
  *	 
@@ -21,15 +21,12 @@
  * 	Please see accompanying LICENSE.md file for details on reuse and 
  * 	redistribution.
  * 	
- * 	Copyright Luke Miller, April 1 2014
+ * 	Based on libraries from Luke Miller. 
+ * 	Modified by Ted Langhorst, March 2023.
  */
 
-#include "MS5803_14.h"
+#include "MS5803.h"
 #include <Wire.h>
-
-// For I2C, set the CSB Pin (pin 3) high for address 0x76, and pull low
-// for address 0x77. If you use 0x77, change the value on the line below:
-#define MS5803_I2C_ADDRESS    0x76
 
 #define CMD_RESET		0x1E	// ADC reset command
 #define CMD_ADC_READ	0x00	// ADC read command
@@ -52,7 +49,6 @@ static uint32_t     D2 = 0;    // Store uncompensated temperature value
 // They should be signed 32-bit integer initially 
 // i.e. signed long from -2147483648 to 2147483647
 static int32_t	dT = 0;
-static int32_t 	TEMP = 0;
 // These values need to be signed 64 bit integers 
 // (long long = int64_t)
 static int64_t	Offset = 0;
@@ -71,72 +67,99 @@ const uint64_t POW_2_37 = 137438953472ULL; // 2^37 = 137438953472
 
 //-------------------------------------------------
 // Constructor
-MS_5803::MS_5803(uint16_t Resolution) {
-	// The argument is the oversampling resolution, which may have values
-	// of 256, 512, 1024, 2048, or 4096.
+MS_5803::MS_5803(uint8_t Version, byte I2C_Address, uint16_t Resolution) {
+	//MS5803 version, currently only supports 2, 5, and 14 bar.
+	_Version = Version;
+	
+	//I2C resolution, which may have values of 0x76 or 0x77.
+	_I2C_Address = I2C_Address;
+
+	// oversampling resolution, which may have values of: 256, 512, 1024, 2048, or 4096.
 	_Resolution = Resolution;
 }
 
 //-------------------------------------------------
-boolean MS_5803::initializeMS_5803(boolean Verbose) {
+boolean MS_5803::initializeMS_5803() {
     Wire.begin();
     // Reset the sensor during startup
     resetSensor(); 
     
-    if (Verbose) {
-    	// Display the oversampling resolution or an error message
-    	if (_Resolution == 256 | _Resolution == 512 | _Resolution == 1024 | _Resolution == 2048 | _Resolution == 4096){
-        	Serial.print("Oversampling setting: ");
-        	Serial.println(_Resolution);    		
-    	} else {
-			Serial.println("*******************************************");
-			Serial.println("Error: specify a valid oversampling value");
-			Serial.println("Choices are 256, 512, 1024, 2048, or 4096");
-			Serial.println("*******************************************");
-    	}
+    #ifdef DEBUG_SERIAL
+    	// Display the constructor settings or an error message
+		if (_Version == 2 || _Version == 5 || _Version == 14){
+			DEBUG_SERIAL.print("MS5803 Version: ");
+			DEBUG_SERIAL.print(_Version);
+			DEBUG_SERIAL.println(" Bar maximum");
+		} else { 
+			DEBUG_SERIAL.println("*******************************************");
+			DEBUG_SERIAL.println("Error: specify a valid MS5803 version");
+			DEBUG_SERIAL.println("Library currently only supports 2, 5, and 14 Bar versions.");
+			DEBUG_SERIAL.println("*******************************************");
+		}
+		if (_I2C_Address == 0x76 || _I2C_Address == 0x77){
+			DEBUG_SERIAL.print("I2C Address: ");
+			DEBUG_SERIAL.println(_I2C_Address);
+		} else { 
+			DEBUG_SERIAL.println("*******************************************");
+			DEBUG_SERIAL.println("Error: specify a valid I2C address");
+			DEBUG_SERIAL.println("Choices are 0x76 or 0x77");
+			DEBUG_SERIAL.println("*******************************************");
+		}
+		if (_Resolution == 256 | _Resolution == 512 | _Resolution == 1024 | _Resolution == 2048 | _Resolution == 4096){
+				DEBUG_SERIAL.print("Oversampling setting: ");
+				DEBUG_SERIAL.println(_Resolution);    		
+		} else {
+			DEBUG_SERIAL.println("*******************************************");
+			DEBUG_SERIAL.println("Error: specify a valid oversampling value");
+			DEBUG_SERIAL.println("Choices are 256, 512, 1024, 2048, or 4096");			
+			DEBUG_SERIAL.println("*******************************************");
+		}
+		//ensure the messages are sent before potentially invalid settings are used below.
+		DEBUG_SERIAL.flush(); 
+    #endif
 
-    }
-	// Read sensor coefficients
+    // Read sensor coefficients
     for (int i = 0; i < 8; i++ ){
     	// The PROM starts at address 0xA0
-    	Wire.beginTransmission(MS5803_I2C_ADDRESS);
+    	Wire.beginTransmission(_I2C_Address);
     	Wire.write(0xA0 + (i * 2));
     	Wire.endTransmission();
-    	Wire.requestFrom(MS5803_I2C_ADDRESS, 2);
+    	Wire.requestFrom(_I2C_Address, 2);
     	while(Wire.available()) {
     		HighByte = Wire.read();
     		LowByte = Wire.read();
     	}
     	sensorCoeffs[i] = (((unsigned int)HighByte << 8) + LowByte);
-    	if (Verbose){
+    	#ifdef DEBUG_SERIAL
 			// Print out coefficients 
-			Serial.print("C");
-			Serial.print(i);
-			Serial.print(" = ");
-			Serial.println(sensorCoeffs[i]);
-			delay(10);
-    	}
+			DEBUG_SERIAL.print("C");
+			DEBUG_SERIAL.print(i);
+			DEBUG_SERIAL.print(" = ");
+			DEBUG_SERIAL.println(sensorCoeffs[i]);
+			DEBUG_SERIAL.flush(); 
+    	#endif
     }
     // The last 4 bits of the 7th coefficient form a CRC error checking code.
     unsigned char p_crc = sensorCoeffs[7];
+	p_crc &= 0b00001111;
     // Use a function to calculate the CRC value
     unsigned char n_crc = MS_5803_CRC(sensorCoeffs); 
     
-    if (Verbose) {
-		Serial.print("p_crc: ");
-		Serial.println(p_crc);
-		Serial.print("n_crc: ");
-		Serial.println(n_crc);
-    }
+    #ifdef DEBUG_SERIAL
+		DEBUG_SERIAL.print("p_crc: ");
+		DEBUG_SERIAL.println(p_crc);
+		DEBUG_SERIAL.print("n_crc: ");
+		DEBUG_SERIAL.println(n_crc);
+    #endif
 	
     // check that coefficients are not all 0. 
-    // If they are, CRC will pass despite unresponsive sensor.
+    // without this check, CRC will pass despite unresponsive sensor.
     bool empty_coeffs = true;
     for (int i = 0; i<8; i++){
-	if (sensorCoeffs[i] !=0){
-	    empty_coeffs = false;
-	    break;
-	}
+		if (sensorCoeffs[i] !=0){
+			empty_coeffs = false;
+			break;
+		}
     }
 
     if (p_crc != n_crc || empty_coeffs) {
@@ -173,14 +196,12 @@ void MS_5803::readSensor() {
 	// cast both parts of the equation below as signed values so that we can
 	// get a negative answer if needed
     dT = (int32_t)D2 - ( (int32_t)sensorCoeffs[5] * 256 );
-    // Use integer division to calculate TEMP. It is necessary to cast
+    // Use integer division to calculate T. It is necessary to cast
     // one of the operands as a signed 64-bit integer (int64_t) so there's no 
     // rollover issues in the numerator.
-//    TEMP = 2000 + ((int64_t)dT * sensorCoeffs[6]) / pow(2,23);
-    TEMP = 2000 + ((int64_t)dT * sensorCoeffs[6]) / 8388608LL;
-//    TEMP = 2000 + ((int64_t)dT * sensorCoeffs[6]) / (int64_t)1<<23;
-    // Recast TEMP as a signed 32-bit integer
-    TEMP = (int32_t)TEMP;
+    T = 2000 + ((int64_t)dT * sensorCoeffs[6]) / 8388608LL;
+    // Recast T as a signed 32-bit integer
+    T = (int32_t)T;
 
     
     // All operations from here down are done as integer math until we make
@@ -190,63 +211,102 @@ void MS_5803::readSensor() {
     // Do 2nd order temperature compensation (see pg 9 of MS5803 data sheet)
     // I have tried to insert the fixed values wherever possible 
     // (i.e. 2^31 is hard coded as 2147483648).
-    if (TEMP < 2000) {
-		// For 14 bar model
-		// If temperature is below 20.0C
-		T2 = 3 * ((int64_t)dT * dT) / POW_2_33 ;
-		T2 = (int32_t)T2; // recast as signed 32bit integer
-		OFF2 = 3 * ((TEMP-2000) * (TEMP-2000)) / 2 ;
-		Sens2 = 5 * ((TEMP-2000) * (TEMP-2000)) / 8 ; 	
-    } else { // if TEMP is > 2000 (20.0C)
-		// For 14 bar model
-		T2 = 7 * ((uint64_t)dT * dT) / POW_2_37;
-		T2 = (int32_t)T2; // recast as signed 32bit integer
-		OFF2 = 1 * ((TEMP-2000) * (TEMP-2000)) / 16;
-		Sens2 = 0;
+    if (T < 2000) { // If temperature is below 20.0C
+		switch(_Version){
+			case 14:
+				T2 = 3 * ((int64_t)dT * dT) / POW_2_33 ;
+				T2 = (int32_t)T2; // recast as signed 32bit integer
+				OFF2 = 3 * ((T-2000) * (T-2000)) / 2 ;
+				Sens2 = 5 * ((T-2000) * (T-2000)) / 8 ; 	
+				break;
+			case 5:
+				T2 = 3 * ((int64_t)dT * dT)  / POW_2_33 ;
+				T2 = (int32_t)T2; // recast as signed 32bit integer
+				OFF2 = 3 * ((T-2000) * (T-2000)) / 8 ;
+				Sens2 = 7 * ((T-2000) * (T-2000)) / 8 ;
+				break;
+			case 2:
+				T2 = ((int64_t)dT * dT) / 2147483648LL ; // 2^31 = 2147483648
+				T2 = (int32_t)T2; // recast as signed 32bit integer
+				OFF2 = (61 * ((T-2000) * (T-2000))) / 16 ;
+				Sens2 = 2 * ((T-2000) * (T-2000)) ;
+				break;
+		}
+    } else { // if T is > 2000 (20.0C)
+		switch(_Version){
+			case 14:
+				T2 = 7 * ((uint64_t)dT * dT) / POW_2_37;
+				T2 = (int32_t)T2; // recast as signed 32bit integer
+				OFF2 = 1 * ((T-2000) * (T-2000)) / 16;
+				Sens2 = 0;
+				break;
+			case 5:
+				T2 = 0;
+				OFF2 = 0;
+				Sens2 = 0;
+				break;
+			case 2:
+				T2 = 0;
+				OFF2 = 0;
+				Sens2 = 0;
+				break;
+		}
     }
     
     // Additional compensation for very low temperatures (< -15C)
-    if (TEMP < -1500) {
-		// For 14 bar model
-		OFF2 = OFF2 + 7 * ((TEMP+1500)*(TEMP+1500));
-		Sens2 = Sens2 + 4 * ((TEMP+1500)*(TEMP+1500));
+    if (T < -1500) {
+		switch(_Version){
+			case 14:
+				OFF2 = OFF2 + 7 * ((T+1500)*(T+1500));
+				Sens2 = Sens2 + 4 * ((T+1500)*(T+1500));
+				break;
+			case 5: 
+				// No additional correction for 5 bar version.
+				break;
+			case 2:
+				OFF2 = OFF2 + 20 * ((T+1500)*(T+1500));
+				Sens2 = Sens2 + 12 * ((T+1500)*(T+1500));
+				break;
+		}
     }
     
     // Calculate initial Offset and Sensitivity
     // Notice lots of casts to int64_t to ensure that the 
     // multiplication operations don't overflow the original 16 bit and 32 bit
     // integers
-	// For 14 bar sensor
-	Offset = (int64_t)sensorCoeffs[2] * 65536 + (sensorCoeffs[4] * (int64_t)dT) / 128;
-	Sensitivity = (int64_t)sensorCoeffs[1] * 32768 + (sensorCoeffs[3] * (int64_t)dT) / 256;
+	switch(_Version){
+		case 14:
+			Offset = (int64_t)sensorCoeffs[2] * 65536 + (sensorCoeffs[4] * (int64_t)dT) / 128;
+			Sensitivity = (int64_t)sensorCoeffs[1] * 32768 + (sensorCoeffs[3] * (int64_t)dT) / 256;	
+			break;
+		case 5:
+			Offset = (int64_t)sensorCoeffs[2] * 262144 + (sensorCoeffs[4] * (int64_t)dT) / 32;
+			Sensitivity = (int64_t)sensorCoeffs[1] * 131072 + (sensorCoeffs[3] * (int64_t)dT) / 128;
+			break;
+		case 2:
+			Offset = (int64_t)sensorCoeffs[2] * 131072 + (sensorCoeffs[4] * (int64_t)dT) / 64;
+			Sensitivity = (int64_t)sensorCoeffs[1] * 65536 + (sensorCoeffs[3] * (int64_t)dT) / 128;
+			break;
+	}
   
-    // Adjust TEMP, Offset, Sensitivity values based on the 2nd order 
+    // Adjust T, Offset, Sensitivity values based on the 2nd order 
     // temperature correction above.
-    TEMP = TEMP - T2; // both should be int32_t
+    T = T - T2; // both should be int32_t
     Offset = Offset - OFF2; // both should be int64_t
     Sensitivity = Sensitivity - Sens2; // both should be int64_t
-    
-    // Final compensated pressure calculation. We first calculate the pressure
-    // as a signed 32-bit integer (mbarInt), then convert that value to a
-    // float (mbar). 
-	// For 14 bar sensor
-	mbarInt = ((D1 * Sensitivity) / 2097152 - Offset) / 32768;
-	mbar = (float)mbarInt / 10;
-    // Calculate the human-readable temperature in Celsius
-    tempC  = (float)TEMP / 100; 
-	
-	
-    // Start other temperature conversions by converting mbar to psi absolute
-//    psiAbs = mbar * 0.0145038;
-//    // Convert psi absolute to inches of mercury
-//    inHgPress = psiAbs * 2.03625;
-//    // Convert psi absolute to gauge pressure
-//    psiGauge = psiAbs - 14.7;
-//    // Convert mbar to mm Hg
-//    mmHgPress = mbar * 0.7500617;
-//    // Convert temperature to Fahrenheit
-//    tempF = (tempC * 1.8) + 32;
-    
+ 
+	// Convert final values to human-readable floats.
+	switch(_Version){
+		case 14:
+			P = ((D1 * Sensitivity) / 2097152 - Offset) / 32768 * 10;
+			break;
+		case 5: 
+			P = ((D1 * Sensitivity) / 2097152 - Offset) / 32768;
+			break;
+		case 2:
+			P = ((D1 * Sensitivity) / 2097152 - Offset) / 32768;
+			break;	
+	}
 }
 
 //------------------------------------------------------------------
@@ -294,7 +354,7 @@ unsigned long MS_5803::MS_5803_ADC(char commandADC) {
 	// a long integer on 8-bit Arduinos.
     long result = 0;
     // Send the command to do the ADC conversion on the chip
-	Wire.beginTransmission(MS5803_I2C_ADDRESS);
+	Wire.beginTransmission(_I2C_Address);
     Wire.write(CMD_ADC_CONV + commandADC);
     Wire.endTransmission();
     // Wait a specified period of time for the ADC conversion to happen
@@ -319,11 +379,11 @@ unsigned long MS_5803::MS_5803_ADC(char commandADC) {
             break;
     }
     // Now send the read command to the MS5803 
-    Wire.beginTransmission(MS5803_I2C_ADDRESS);
+    Wire.beginTransmission(_I2C_Address);
     Wire.write((byte)CMD_ADC_READ); // added cast
     Wire.endTransmission();
     // Then request the results. This should be a 24-bit result (3 bytes)
-    Wire.requestFrom(MS5803_I2C_ADDRESS, 3);
+    Wire.requestFrom(_I2C_Address, 3);
     while(Wire.available()) {
     	HighByte = Wire.read();
     	MidByte = Wire.read();
@@ -337,7 +397,7 @@ unsigned long MS_5803::MS_5803_ADC(char commandADC) {
 //----------------------------------------------------------------
 // Sends a power on reset command to the sensor.
 void MS_5803::resetSensor() {
-    	Wire.beginTransmission(MS5803_I2C_ADDRESS);
+    	Wire.beginTransmission(_I2C_Address);
         Wire.write(CMD_RESET);
         Wire.endTransmission();
     	delay(10);
