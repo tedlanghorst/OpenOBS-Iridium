@@ -14,14 +14,14 @@
 #include "src/libs/MS5803/MS5803.h"  
 
 // Likely variables to change
-long sleepDuration_seconds = 10;
+long sleepDuration_seconds = 0;
 bool useIridium = false;
-const char contactInfo[] PROGMEM = "If found, please contact tlang@live.unc.edu";
+const char contactInfo[] PROGMEM = "If found, please contact pavelsky@unc.edu";
 //
 
 //firmware data
 const DateTime uploadDT = DateTime((__DATE__),(__TIME__)); //saves compile time into progmem
-const char dataColumnLabels[] PROGMEM = "time,hydrostatic_pressure,ambient_light,scattered_light,water_temperature,battery_level";
+const char dataColumnLabels[] PROGMEM = "time,ambient_light,backscatter,water_pressure,water_temp,air_pressure_anomaly,air_temp,battery_level";
 uint16_t serialNumber; 
 
 //connected pins
@@ -41,6 +41,7 @@ const uint16_t COMMS_WAIT = 2000; //ms delay to try gui connection
 const uint8_t COMMS_TRY = 3;    
 const uint8_t MAX_CHAR = 60;            //max num character in messages
 char messageBuffer[MAX_CHAR];       //buffer for sending and receiving comms
+#define cacheSize 23
 
 SerialTransfer myTransfer;
 
@@ -64,10 +65,11 @@ typedef union data_union_t{
   single_record_t records[N_RECORDS];
   byte serialPacket[sizeof(single_record_t)*N_RECORDS];
 };
-data_union_t data, data_failedPacket;
+data_union_t data, data_cachedPacket[cacheSize];
+bool cachedPacket[cacheSize];
 
 uint8_t recordCount = 0;
-bool failedPacket = false;
+
 
 int16_t batteryLevel;
 
@@ -252,6 +254,13 @@ void loop()
       Serial.print(hexChar);
     }
     Serial.println();
+    int cacheCount = 0;
+    for (int i=0; i<cacheSize; i++){
+      cacheCount += cachedPacket[i];
+    }
+    Serial.print(F("Cached packets: "));
+    Serial.println(cacheCount);
+    Serial.println();
     Serial.println();
     if (useIridium){
       int tries = 0;
@@ -259,17 +268,6 @@ void loop()
       digitalWrite(pIridiumPower,HIGH);
       while (!messageSent && tries<2){
         Serial.println(F("Trying to send the message.  This might take a minute."));
-        //This could be more elegant. Currently only care if the current packet sends. 
-        //If we fail 2 in a row the older will be overwritten (still on SD card).
-        //Should also pack this stuff in a function, could handle the 2 sends more elegantly that way.
-        if (failedPacket){
-          //send the old data if we have some.
-          modemErr = modem.sendSBDBinary(data_failedPacket.serialPacket,sizeof(data_failedPacket));
-          if (modemErr == ISBD_SUCCESS){
-            Serial.println(F("Previous failed packet sent!"));
-            failedPacket = false;
-          }
-        }
         //send the current data packet.
         modemErr = modem.sendSBDBinary(data.serialPacket,sizeof(data));
         tries++;
@@ -284,7 +282,21 @@ void loop()
           Serial.println(F("Message sent!"));
           messageSent = true;
         }
-    
+
+        //if we had success, try clearing the message cache.
+        if (messageSent){
+          for (int i=0; i<cacheSize; i++){
+            //send the old data if we have some.
+            if (cachedPacket[i]){
+              modemErr = modem.sendSBDBinary(data_cachedPacket[i].serialPacket,sizeof(data_cachedPacket[i]));
+              if (modemErr == ISBD_SUCCESS){
+                Serial.println(F("Cached packet sent"));
+                cachedPacket[i] = false;
+              } 
+            }
+          }
+        }
+
         // Clear the Mobile Originated message buffer
         modemErr = modem.clearBuffers(ISBD_CLEAR_MO); // Clear MO buffer
         if (modemErr != ISBD_SUCCESS){
@@ -295,8 +307,13 @@ void loop()
       Serial.println();
       }
       if (!messageSent){
-        data_failedPacket = data; //store failed data, try next time.
-        failedPacket = true;
+        for (int i=0; i<cacheSize; i++){
+          if (!cachedPacket[i]){
+            data_cachedPacket[i] = data; //store failed data, try next time.
+            cachedPacket[i] = true;
+            break;
+          }
+        }
       }
     }
   }

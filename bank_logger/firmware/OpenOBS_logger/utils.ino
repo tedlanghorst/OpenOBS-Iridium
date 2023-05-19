@@ -55,13 +55,17 @@ void writeDataToSD(single_record_t record){
   file.open(filename, O_WRITE | O_APPEND);
     file.print(record.logTime);
     file.print(',');
-    file.print(record.hydro_p);
-    file.print(',');
     file.print(record.tuBackground);
     file.print(',');
     file.print(record.tuReading);
     file.print(',');
+    file.print(record.hydro_p);
+    file.print(',');
     file.print(record.water_temp);
+    file.print(',');
+    file.print(record.baroAnomaly_p);
+    file.print(',');
+    file.print(record.air_temp);
     file.print(',');
     file.println(batteryLevel); //klugey use of global variable...
   file.close();
