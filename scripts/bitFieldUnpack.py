@@ -23,27 +23,24 @@ class single_record(ct.LittleEndianStructure):
                 ("batteryVoltage",ct.c_uint32,8)]    
     
 class transmission_packet(ct.Union):
-    _fields_ = [("record", single_record*(nBytes//sizeof(single_record))),
+    _fields_ = [("record", single_record*(nBytes//ct.sizeof(single_record))),
                 ("data", ct.c_ubyte*nBytes)]
     
 
 #Create a packet object and put our data in as a byte array.
 packet = transmission_packet()
-packet.data = (c_ubyte * nBytes)(*dataBytes)
+packet.data = (ct.c_ubyte * nBytes)(*dataBytes)
 
 #example data access
-print(packet.record[0].logtime)
+#print(packet.record[0].logtime)
+
+#print a whole packet
+for r in packet.record:
+    print()
+    for f in r._fields_:
+        print('{:<20s}{}'.format(f[0],getattr(r,f[0])))
 
 # %%
-for r in packet.record:
-    print(f"unix time:      {r.logtime}\n"
-          f"background:     {r.tuBackground}\n" 
-          f"backscatter:    {r.tuBackscatter}\n"
-          f"water P:        {r.waterPressure}\n"
-          f"water temp:     {r.waterTemp}\n"
-          f"baro P:         {1E5+r.baroAnomaly}\n"
-          f"air temp:       {r.airTemp}\n"
-          f"battery V:      {r.batteryVoltage}\n")
     
     
 
