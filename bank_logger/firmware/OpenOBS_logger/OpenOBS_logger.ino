@@ -70,7 +70,6 @@ bool cachedPacket[cacheSize];
 
 uint8_t recordCount = 0;
 
-
 int16_t batteryLevel;
 
 //initialization variable
@@ -246,23 +245,25 @@ void loop()
   //if we have filled out transmit packet...
   if(recordCount == N_RECORDS){
     recordCount = 0; //reset our packet idx
-    Serial.println("~~~Packet filled!~~~");
-
-    char hexChar[2];
-    for(int i=0; i<sizeof(data.serialPacket); i++){
-      sprintf(hexChar,"%02X",data.serialPacket[i]);
-      Serial.print(hexChar);
-    }
-    Serial.println();
-    int cacheCount = 0;
-    for (int i=0; i<cacheSize; i++){
-      cacheCount += cachedPacket[i];
-    }
-    Serial.print(F("Cached packets: "));
-    Serial.println(cacheCount);
-    Serial.println();
-    Serial.println();
+    
     if (useIridium){
+      Serial.println("~~~Packet filled!~~~");
+
+      char hexChar[2];
+      for(int i=0; i<sizeof(data.serialPacket); i++){
+        sprintf(hexChar,"%02X",data.serialPacket[i]);
+        Serial.print(hexChar);
+      }
+      Serial.println();
+      int cacheCount = 0;
+      for (int i=0; i<cacheSize; i++){
+        cacheCount += cachedPacket[i];
+      }
+      Serial.print(F("Cached packets: "));
+      Serial.println(cacheCount);
+      Serial.println();
+      Serial.println();
+    
       int tries = 0;
       bool messageSent = false;
       digitalWrite(pIridiumPower,HIGH);
@@ -316,7 +317,7 @@ void loop()
         }
       }
     }
-  }
+  } 
 
   //ensure a 5 second margin for the next alarm before shutting down.
   //if the alarm we set during this wake has already passed, the OBS will never wake up.
