@@ -197,6 +197,9 @@ void loop()
 { 
   nextAlarm = DateTime(RTC.now().unixtime() + sleepDuration_seconds);
 
+  startup.module.sd = sd.begin(pChipSelect,SPI_SPEED);
+  if(!startup.module.sd) Serial.println("SD WAKEUP FAILED");
+
   updateFilename();
   sprintf(messageBuffer,"FILE,OPEN,%s\0",filename);
   serialSend(messageBuffer);
