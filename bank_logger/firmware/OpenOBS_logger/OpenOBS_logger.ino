@@ -197,8 +197,19 @@ void loop()
 { 
   nextAlarm = DateTime(RTC.now().unixtime() + sleepDuration_seconds);
 
-  startup.module.sd = sd.begin(pChipSelect,SPI_SPEED);
-  if(!startup.module.sd) Serial.println("SD WAKEUP FAILED");
+  Serial.print("Waking SD Card ");
+  startup.module.sd = false;
+  int count = 0;
+  while (!startup.module.sd){
+    startup.module.sd = sd.begin(pChipSelect,SPI_SPEED);
+    Serial.print(".")
+    count += 1;
+    if (count > 20){
+      Serial.print("SD initialization failed after 20 attempts");
+    }
+    delay(250)
+  }
+  Serial.println();
 
   updateFilename();
   sprintf(messageBuffer,"FILE,OPEN,%s\0",filename);
