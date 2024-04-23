@@ -39,7 +39,7 @@ void loggerSleep(DateTime alarmTime){
   // RTC.enableAlarm(alarmTime);
   // serialSend("POWEROFF,1");
   // attachInterrupt(digitalPinToInterrupt(pRtcInterrupt), wake, LOW);
-  // sensorSleep();
+  sensorSleep();
   // delay(500); //Extra time to ensure interrupt attach and sd file.
   // LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
 
