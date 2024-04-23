@@ -14,7 +14,7 @@
 #include "src/libs/MS5803/MS5803.h"  
 
 // Likely variables to change
-long sleepDuration_seconds = 0;
+long sleepDuration_seconds = 10;
 bool useIridium = false;
 const char contactInfo[] PROGMEM = "If found, please contact pavelsky@unc.edu";
 //
@@ -202,12 +202,14 @@ void loop()
   int count = 0;
   while (!startup.module.sd){
     startup.module.sd = sd.begin(pChipSelect,SPI_SPEED);
-    Serial.print(".")
+    Serial.print(".");
     count += 1;
     if (count > 20){
+      Serial.println();
       Serial.print("SD initialization failed after 20 attempts");
+      break;
     }
-    delay(250)
+    delay(250);
   }
   Serial.println();
 
@@ -221,6 +223,7 @@ void loop()
   pressure_sensor.readSensor();
 
  //wait for data to be available
+  bool timeout = true;
   long tStart = millis();
   while (millis() - tStart < COMMS_WAIT) {
     if(myTransfer.available()){
@@ -252,8 +255,12 @@ void loop()
       Serial.println();
       Serial.flush();
       recordCount += 1;
+      timeout = false;
       break;
     }
+  }
+  if (timeout){
+    Serial.println("Sensor timeout");
   }
 
   //if we have filled out transmit packet...

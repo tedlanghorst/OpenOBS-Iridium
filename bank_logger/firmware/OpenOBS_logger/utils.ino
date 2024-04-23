@@ -34,17 +34,14 @@ void sensorSleep(){
 
 
 void loggerSleep(DateTime alarmTime){
-  // digitalWrite(pIridiumPower,LOW);
-  // RTC.clearAlarm(); //clear last alarm
-  // RTC.enableAlarm(alarmTime);
-  // serialSend("POWEROFF,1");
-  // attachInterrupt(digitalPinToInterrupt(pRtcInterrupt), wake, LOW);
+  digitalWrite(pIridiumPower,LOW);
+  RTC.clearAlarm(); //clear last alarm
+  RTC.enableAlarm(alarmTime);
+  serialSend("POWEROFF,1");
+  attachInterrupt(digitalPinToInterrupt(pRtcInterrupt), wake, LOW);
   sensorSleep();
-  // delay(500); //Extra time to ensure interrupt attach and sd file.
-  // LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
-
-  //Mimic sleeping. Power-hungry alternative but I can't figure out the power issues remotely.
- delay(sleepDuration_seconds*1000); 
+  delay(500); //Extra time to ensure interrupt attach and sd file.
+  LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
 }
 
 void wake(){
