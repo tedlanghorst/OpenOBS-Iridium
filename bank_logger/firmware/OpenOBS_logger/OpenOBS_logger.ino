@@ -344,6 +344,8 @@ void loop()
   //if the alarm we set during this wake has already passed, the OBS will never wake up.
   long timeUntilAlarm = nextAlarm.unixtime()-RTC.now().unixtime();
   if(timeUntilAlarm > 5){
-    loggerSleep(nextAlarm);
+    // Wastes power but SD has been failing to init after sleep.
+    delay(timeUntilAlarm*1000); 
+    // loggerSleep(nextAlarm);
   }
 }
